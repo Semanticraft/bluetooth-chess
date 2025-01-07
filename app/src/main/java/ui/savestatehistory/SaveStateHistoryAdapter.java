@@ -60,10 +60,10 @@ public class SaveStateHistoryAdapter extends RecyclerView.Adapter<ui.savestatehi
     public void onBindViewHolder(@NonNull SaveStateHistoryViewHolder holder, int position) {
         SaveState saveState = saveStates.get(position);
         holder.IDTextView.setText(String.valueOf(saveState.getId()));
-        holder.timestampTextView.setText(saveState.getTimestamp());
+        holder.timestampTextView.setText(String.valueOf(saveState.getTimestamp()));
         holder.deleteButton.setOnClickListener(v -> {
             try {
-                Deleter.delete((new File(context.getFilesDir(), "saved_states.txt")).getAbsolutePath(), saveState.getId());
+                Deleter.delete((new File(context.getFilesDir(), "saved_states.txt")).getAbsolutePath(), saveState.getTimestamp());
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
