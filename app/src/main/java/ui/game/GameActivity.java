@@ -73,7 +73,7 @@ public class GameActivity extends AppCompatActivity implements PropertyChangeLis
 
         chessboardGrid = findViewById(R.id.chessboardGrid);
         int gridSize = 8;
-        int cellSize = 125; // size in pixels for each cell
+        int cellSize = 125; 
 
         chessboardGrid.setRowCount(gridSize);
         chessboardGrid.setColumnCount(gridSize);
@@ -147,7 +147,6 @@ public class GameActivity extends AppCompatActivity implements PropertyChangeLis
 
         cell.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                // Start drag operation with piece info as clip data
                 View.DragShadowBuilder shadowBuilder = new View.DragShadowBuilder(v);
                 v.startDragAndDrop(null, shadowBuilder, new int[]{row, col}, 0);
                 return true;
@@ -158,19 +157,18 @@ public class GameActivity extends AppCompatActivity implements PropertyChangeLis
         cell.setOnDragListener((v, event) -> {
             switch (event.getAction()) {
                 case DragEvent.ACTION_DRAG_STARTED:
-                    return true; // Accept the drag
+                    return true; 
                 case DragEvent.ACTION_DRAG_ENTERED:
-                    v.setAlpha(0.7f); // Highlight target cell
+                    v.setAlpha(0.7f); 
                     return true;
                 case DragEvent.ACTION_DRAG_EXITED:
-                    v.setAlpha(1.0f); // Remove highlight
+                    v.setAlpha(1.0f); 
                     return true;
                 case DragEvent.ACTION_DROP:
-                    v.setAlpha(1.0f); // Reset highlight
+                    v.setAlpha(1.0f);
                     int[] startPosition = (int[]) event.getLocalState();
                     int startRow = startPosition[0];
                     int startCol = startPosition[1];
-                    // Calculate the end position
                     int index = chessboardGrid.indexOfChild(v);
                     int gridSize = 8;
                     int endRow = index / gridSize;
