@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- TextView -->
+    <TextView
+        android:id="@+id/txt_id_game"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="24sp"
+        android:layout_gravity="center_horizontal"
+        android:paddingBottom="16dp" />
+
+    <!-- Chessboard -->
+    <GridLayout
+        android:id="@+id/chessboardGrid"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:rowCount="8"
+        android:columnCount="8"
+        android:layout_gravity="center_horizontal">
+    </GridLayout>
+
+    <!-- Buttons -->
+    <Button
+        android:id="@+id/btn_request_draw_game"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_request_draw_game" />
+
+    <Button
+        android:id="@+id/btn_accept_draw_game"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_accept_draw_game" />
+
+    <Button
+        android:id="@+id/btn_disconnect_game"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_disconnect" />
+</LinearLayout>
