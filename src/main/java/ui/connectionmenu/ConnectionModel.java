@@ -17,6 +17,6 @@ public class ConnectionModel extends ViewModel {
 
     void addID(long ID) {
         IDs.add(ID);
-        uiState.setValue(IDs);
+        uiState.postValue(IDs);
     }
 }

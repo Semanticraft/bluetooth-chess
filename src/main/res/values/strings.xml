@@ -11,7 +11,7 @@
     <string name="btn_request">Anfragen</string>
     <string name="btn_rematch">Rematch</string>
     <string name="btn_nav_back_to_main">Zurück zum Hauptmenü</string>
-    <string name="btn_request_draw_game">Unentschieden Annehmen</string>
-    <string name="btn_accept_draw_game">Unentschieden Annehmeen</string>
+    <string name="btn_request_draw_game">Unentschieden Anfragen</string>
+    <string name="btn_accept_draw_game">Unentschieden Annehmen</string>
     <string name="btn_disconnect">Spiel Abbrechen</string>
 </resources>

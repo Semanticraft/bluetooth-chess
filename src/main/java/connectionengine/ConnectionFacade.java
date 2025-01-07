@@ -15,111 +15,97 @@ import android.os.Handler;
 import android.util.Log;
 import android.widget.Toast;
 
-import org.jetbrains.annotations.NotNull;
-
 import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.io.Serial;
-import java.io.Serializable;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Used to build a connection, send and receive PDUs and observe the connection status.
  */
-public class ConnectionFacade implements Serializable {
+public class ConnectionFacade {
+    private static ConnectionFacade instance;
     public static final int REQUEST_ENABLE_BT = 1;
     private long playerID;
-    private transient HashMap<Long, BluetoothDevice> devices = new HashMap<>();
-    private transient ObjectInputStream in;
-    private transient ObjectOutputStream out;
-    private int connectionStatus;
-    private transient BluetoothAdapter bluetoothAdapter;
-    private transient BluetoothDevice currentDevice;
-    private transient BroadcastReceiver receiver;
+    private static final ConcurrentHashMap<Long, BluetoothDevice> devices = new ConcurrentHashMap<>();
+    private static ObjectInputStream in;
+    private ObjectOutputStream out;
+    private boolean isDiscoverer = false;
+    private static BluetoothAdapter bluetoothAdapter;
+    private static BluetoothDevice currentDevice;
+    private final Object lock = new Object();
+    private static final BroadcastReceiver receiver = new BroadcastReceiver() {
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED.equals(action)) {
+                int connectionState = intent.getIntExtra(BluetoothAdapter.EXTRA_CONNECTION_STATE, BluetoothAdapter.ERROR);
 
-    private transient Context context;
-    private transient Handler handler;
+                switch (connectionState) {
+                    case BluetoothAdapter.STATE_CONNECTED:
+                        setConnectionStatus(BluetoothAdapter.STATE_CONNECTED);
+                        break;
+                    case BluetoothAdapter.STATE_DISCONNECTED:
+                        setConnectionStatus(BluetoothAdapter.STATE_DISCONNECTED);
+                        break;
+                    case BluetoothAdapter.STATE_CONNECTING:
+                        setConnectionStatus(BluetoothAdapter.STATE_CONNECTING);
+                        break;
+                    case BluetoothAdapter.STATE_DISCONNECTING:
+                        setConnectionStatus(BluetoothAdapter.STATE_DISCONNECTING);
+                        break;
+                    default:
+                        Log.d("Bluetooth", "Unknown connection state.");
+                        break;
+                }
+            }
+        }
+    };
+
+    private Handler handler;
     private boolean isDiscoveryRunning = false;
-    private transient AcceptThread acceptThread;
-    private transient ConnectThread connectThread;
-    private PropertyChangeSupport propertyChangeSupport = new PropertyChangeSupport(this);
+    private static AcceptThread acceptThread;
+    private ConnectThread connectThread;
+    private static PropertyChangeSupport propertyChangeSupport = new PropertyChangeSupport(ConnectionFacade.class);
 
     public ConnectionFacade(long playerID, Context context) throws UnsupportedOperationException {
         initializeBluetoothAdapter(context);
-        initializeBroadcastReceiver();
-        acceptThread = new AcceptThread();
-        acceptThread.start();
         this.handler = new Handler();
         this.playerID = playerID;
-        this.context = context;
     }
 
-    @Serial
-    private void writeObject(@NotNull ObjectOutputStream out) throws IOException {
-        out.writeLong(playerID);
-        out.writeInt(connectionStatus);
-        out.writeBoolean(isDiscoveryRunning);
-        out.writeObject(propertyChangeSupport);
+    public static synchronized ConnectionFacade getInstance(long playerID, Context context) {
+        if (instance == null) {
+            instance = new ConnectionFacade(playerID, context);
+        }
+        for (PropertyChangeListener listener : propertyChangeSupport.getPropertyChangeListeners()) {
+            propertyChangeSupport.removePropertyChangeListener(listener);
+        }
+        if (bluetoothAdapter == null) initializeBluetoothAdapter(context);
+        startAcceptThread();
+        propertyChangeSupport.addPropertyChangeListener((PropertyChangeListener) context);
+        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
+        context.registerReceiver(receiver, filter);
+        return instance;
     }
 
-    @Serial
-    private void readObject(@NotNull ObjectInputStream in) throws IOException, ClassNotFoundException {
-        playerID = in.readLong();
-        connectionStatus = in.readInt();
-        isDiscoveryRunning = in.readBoolean();
-        propertyChangeSupport = (PropertyChangeSupport) in.readObject();
-
-        handler = new Handler();
-    }
-
-    public void initializeBluetoothAdapter(Context context) {
+    private static void initializeBluetoothAdapter(Context context) {
         BluetoothManager bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         if (bluetoothManager == null) {
             throw new UnsupportedOperationException("Bluetooth is not supported on this device.");
         }
-        this.bluetoothAdapter = bluetoothManager.getAdapter();
-        if (this.bluetoothAdapter == null) {
+        bluetoothAdapter = bluetoothManager.getAdapter();
+        if (bluetoothAdapter == null) {
             throw new UnsupportedOperationException("Bluetooth is not supported on this device.");
         }
     }
 
-    public void initializeBroadcastReceiver() {
-        receiver = new BroadcastReceiver() {
-            public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
-                if (BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED.equals(action)) {
-                    int connectionState = intent.getIntExtra(BluetoothAdapter.EXTRA_CONNECTION_STATE, BluetoothAdapter.ERROR);
-
-                    switch (connectionState) {
-                        case BluetoothAdapter.STATE_CONNECTED:
-                            setConnectionStatus(BluetoothAdapter.STATE_CONNECTED);
-                            break;
-                        case BluetoothAdapter.STATE_DISCONNECTED:
-                            setConnectionStatus(BluetoothAdapter.STATE_DISCONNECTED);
-                            break;
-                        case BluetoothAdapter.STATE_CONNECTING:
-                            setConnectionStatus(BluetoothAdapter.STATE_CONNECTING);
-                            break;
-                        case BluetoothAdapter.STATE_DISCONNECTING:
-                            setConnectionStatus(BluetoothAdapter.STATE_DISCONNECTING);
-                            break;
-                        default:
-                            Log.d("Bluetooth", "Unknown connection state.");
-                            break;
-                    }
-                }
-            }
-        };
-    }
-
-    public void startAcceptThread() {
+    private static void startAcceptThread() {
         acceptThread = new AcceptThread();
         acceptThread.start();
     }
@@ -131,7 +117,7 @@ public class ConnectionFacade implements Serializable {
      * @throws IllegalStateException if another discovery or BT operation is already running.
      */
     @SuppressLint("MissingPermission")
-    public void startEngine(boolean discoverable) {
+    public void startEngine(boolean discoverable, Context context) {
         // I'll try to make a better strategy for denial, but for now this will work
         // It'll just continuously ask to enable Bluetooth until the user accepts
         while (!bluetoothAdapter.isEnabled()) {
@@ -144,15 +130,16 @@ public class ConnectionFacade implements Serializable {
         }
 
         if (discoverable) {
-            setDiscoverable();
+            setDiscoverable(context);
         } else {
-            startDiscovery();
+            startDiscovery(context);
         }
     }
 
 
     @SuppressLint("MissingPermission")
-    private void setDiscoverable() {
+    private void setDiscoverable(Context context) {
+        isDiscoverer = false;
         int requestCode = 1;
         Intent discoverableIntent =
                 new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
@@ -161,29 +148,37 @@ public class ConnectionFacade implements Serializable {
     }
 
     @SuppressLint("MissingPermission")
-    private void startDiscovery() {
+    private void startDiscovery(Context context) {
         if (!bluetoothAdapter.startDiscovery()) {
             Log.e("BluetoothDiscovery", "Failed to start Bluetooth discovery.");
             Toast.makeText(context, "Unable to start Bluetooth discovery. Please try again.", Toast.LENGTH_SHORT).show();
         }
         isDiscoveryRunning = true;
-
-        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
-        context.registerReceiver(receiver, filter);
+        isDiscoverer = true;
 
         // Set a timeout to ensure discovery stops after a certain period.
         handler.postDelayed(() -> {
             if (isDiscoveryRunning) {
-                stopDiscovery();
                 Set<BluetoothDevice> pairedDevices = bluetoothAdapter.getBondedDevices();
                 if (!pairedDevices.isEmpty()) {
                     for (BluetoothDevice device : pairedDevices) {
-                        connectThread = new ConnectThread(device);
-                        connectThread.start();
+
+                        Log.e(device.getName(), device.getName());
+                        synchronized (lock) {
+                            connectThread = new ConnectThread(device);
+                            connectThread.start();
+                            try {
+                                lock.wait();
+                            } catch (InterruptedException ignored) {}
+                        }
                         try {
-                            serializePlayerIDPDU(playerID);
-                        } catch (IOException ignored) {}
-                        connectThread.cancel();
+                            if (out != null) {
+                                serializePlayerIDPDU(playerID);
+                                synchronized (lock) {
+                                    lock.wait();
+                                }
+                            }
+                        } catch (IOException | InterruptedException ignored) {}
                     }
                 }
             }
@@ -202,11 +197,14 @@ public class ConnectionFacade implements Serializable {
      * For an ordinary connection release for navigation to another Activity, in which the connection
      * is not useful anymore or if the game is aborted.
      */
-    public void stopEngine() {
-        context.unregisterReceiver(receiver);
+    public void stopEngine(Context context) {
         stopDiscovery();
         acceptThread.cancel();
-        connectThread.cancel();
+        if (connectThread != null) connectThread.cancel();
+    }
+
+    public void unregisterReceiver(Context context) {
+        context.unregisterReceiver(receiver);
     }
 
     /**
@@ -218,41 +216,18 @@ public class ConnectionFacade implements Serializable {
         if (devices.get(playerID) == null) throw new IllegalArgumentException("Gerät mit gegebener ID wurde nicht gefunden.");
         connectThread = new ConnectThread(Objects.requireNonNull(devices.get(playerID)));
         connectThread.start();
+        stopDiscovery();
     }
 
-    public void addPropertyChangeListener(PropertyChangeListener pcl) {
-        propertyChangeSupport.addPropertyChangeListener(pcl);
-    }
-
-    public void removePropertyChangeListener(PropertyChangeListener pcl) {
-        propertyChangeSupport.removePropertyChangeListener(pcl);
-    }
-
-    public HashMap<Long, BluetoothDevice> getDevices() {
-        return devices;
-    }
-
-    private void addDevice(long playerID, BluetoothDevice device) {
+    private static void addDevice(long playerID, BluetoothDevice device) {
+        if (playerID == 0) {
+            throw new IllegalArgumentException("Player ID cannot be 0");
+        }
+        if (device == null) {
+            throw new IllegalArgumentException("Device cannot be null");
+        }
         devices.put(playerID, device);
         propertyChangeSupport.firePropertyChange("New Device", 0, playerID);
-    }
-
-    private void removeDevice(BluetoothDevice device) {
-        if (getKeyByValue(devices, device) == null) {
-            return;
-        }
-        long ID = getKeyByValue(devices, device);
-        devices.remove(ID);
-        propertyChangeSupport.firePropertyChange("Removed Device", 0, ID);
-    }
-
-    private static <K, V> K getKeyByValue(Map<K, V> map, V value) {
-        for (Map.Entry<K, V> entry : map.entrySet()) {
-            if (entry.getValue().equals(value)) {
-                return entry.getKey();
-            }
-        }
-        return null;
     }
 
     public long getPlayerID() {
@@ -284,7 +259,11 @@ public class ConnectionFacade implements Serializable {
         out.flush();
     }
 
-    private void handleInputStream() throws IOException, ClassNotFoundException {
+    public Object getLock() {
+        return lock;
+    }
+
+    private static void handleInputStream() throws IOException, ClassNotFoundException, InterruptedException {
         Object received = in.readObject();
         if (received instanceof DrawPDU) {
             propertyChangeSupport.firePropertyChange("Draw", false, ((DrawPDU) received).isDrawFlagActive());
@@ -297,40 +276,38 @@ public class ConnectionFacade implements Serializable {
         }
         if (received instanceof PlayerIDPDU) {
             addDevice(((PlayerIDPDU) received).getPlayerID(), currentDevice);
+            if (!instance.isDiscoverer) {
+                synchronized (instance.lock) {
+                    instance.connectTo(((PlayerIDPDU) received).getPlayerID());
+                    instance.lock.wait();
+                }
+                instance.serializePlayerIDPDU(instance.playerID);
+            } else {
+                synchronized (instance.lock) {
+                    instance.connectThread.cancel();
+                    instance.lock.notify();
+                }
+            }
         }
         if (received instanceof StartPDU) {
             propertyChangeSupport.firePropertyChange("Start", ((StartPDU) received).getEnemyID(), ((StartPDU) received).getSavedState());
         }
     }
 
-    private void setConnectionStatus(int connectionStatus) {
-        this.connectionStatus = connectionStatus;
+    private static void setConnectionStatus(int connectionStatus) {
         propertyChangeSupport.firePropertyChange("Connection", 0, connectionStatus);
-    }
-
-    public int getConnectionStatus() {
-        return connectionStatus;
-    }
-
-    public void setContext(Context context) {
-        this.context = context;
-    }
-
-    public BluetoothDevice getCurrentDevice() {
-        return currentDevice;
     }
 
     public void setCurrentDevice(BluetoothDevice bluetoothDevice) {
         currentDevice = bluetoothDevice;
     }
 
-    private class AcceptThread extends Thread {
+    private static class AcceptThread extends Thread {
         private final BluetoothServerSocket mmServerSocket;
+        private boolean isInterrupted = false;
 
         @SuppressLint("MissingPermission")
         public AcceptThread() {
-            // Use a temporary object that is later assigned to mmServerSocket
-            // because mmServerSocket is final.
             BluetoothServerSocket tmp = null;
             try {
                 tmp = bluetoothAdapter.listenUsingRfcommWithServiceRecord("btchess", UUID.fromString("baa6cde2-3025-4aea-b078-db83988c812a"));
@@ -342,8 +319,8 @@ public class ConnectionFacade implements Serializable {
 
         public void run() {
             BluetoothSocket socket;
-            // Keep listening until exception occurs or a socket is returned.
-            while (true) {
+            isInterrupted = false;
+            while (!isInterrupted) {
                 try {
                     socket = mmServerSocket.accept();
                 } catch (IOException e) {
@@ -352,32 +329,31 @@ public class ConnectionFacade implements Serializable {
                 }
 
                 if (socket != null) {
-                    // A connection was accepted. Perform work associated with
-                    // the connection in a separate thread.
                     try {
                         in = new ObjectInputStream(socket.getInputStream());
+                        instance.setCurrentDevice(socket.getRemoteDevice());
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
                     try {
                         handleInputStream();
-                    } catch (IOException | ClassNotFoundException e) {
+                    } catch (IOException | ClassNotFoundException | InterruptedException e) {
                         throw new RuntimeException(e);
                     }
                     try {
-                        mmServerSocket.close();
+                        socket.close();
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
-                    break;
                 }
             }
         }
 
-        // Closes the connect socket and causes the thread to finish.
         public void cancel() {
             try {
+                isInterrupted = true;
                 mmServerSocket.close();
+                in = null;
             } catch (IOException e) {
                 Log.e("Server", "Could not close the connect socket", e);
             }
@@ -389,14 +365,10 @@ public class ConnectionFacade implements Serializable {
 
         @SuppressLint("MissingPermission")
         public ConnectThread(BluetoothDevice device) {
-            // Use a temporary object that is later assigned to mmSocket
-            // because mmSocket is final.
             BluetoothSocket tmp = null;
             setCurrentDevice(device);
 
             try {
-                // Get a BluetoothSocket to connect with the given BluetoothDevice.
-                // MY_UUID is the app's UUID string, also used in the server code.
                 tmp = device.createRfcommSocketToServiceRecord(UUID.fromString("baa6cde2-3025-4aea-b078-db83988c812a"));
             } catch (IOException e) {
                 Log.e("Client", "Socket's create() method failed", e);
@@ -408,32 +380,33 @@ public class ConnectionFacade implements Serializable {
         public void run() {
             // Cancel discovery because it otherwise slows down the connection.
             bluetoothAdapter.cancelDiscovery();
-
-            try {
-                // Connect to the remote device through the socket. This call blocks
-                // until it succeeds or throws an exception.
-                mmSocket.connect();
-            } catch (IOException connectException) {
-                // Unable to connect; close the socket and return.
+            synchronized (lock) {
                 try {
-                    mmSocket.close();
-                } catch (IOException closeException) {
-                    Log.e("Client", "Could not close the client socket", closeException);
+                    mmSocket.connect();
+                } catch (IOException connectException) {
+                    try {
+                        mmSocket.close();
+                        lock.notify();
+                        Log.e("FATAL", "Could not form connection!", connectException);
+                    } catch (IOException closeException) {
+                        Log.e("Client", "Could not close the client socket", closeException);
+                    }
+                    return;
                 }
-                return;
-            }
 
-            try {
-                out = new ObjectOutputStream(mmSocket.getOutputStream());
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+                try {
+                    out = new ObjectOutputStream(mmSocket.getOutputStream());
+                    lock.notify();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
             }
         }
 
-        // Closes the client socket and causes the thread to finish.
         public void cancel() {
             try {
                 mmSocket.close();
+                out = null;
             } catch (IOException e) {
                 Log.e("Client", "Could not close the client socket", e);
             }

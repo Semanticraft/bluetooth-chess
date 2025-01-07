@@ -1,6 +1,7 @@
 package ui.game;
 
 import android.annotation.SuppressLint;
+import android.bluetooth.BluetoothAdapter;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -13,9 +14,13 @@ import com.example.bluetoothchess.R;
 
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
+import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Objects;
 
+import android.util.Log;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.GridLayout;
@@ -25,8 +30,11 @@ import connectionengine.ConnectionFacade;
 import endstates.EndState;
 import gamelogic.FENGenerator;
 import gamelogic.GameRules;
-import persistence.Reader;
+import persistence.Writer;
 import records.MoveResult;
+import ui.end.EndActivity;
+import ui.main.MainActivity;
+import util.Util;
 
 import android.view.DragEvent;
 import android.widget.TextView;
@@ -39,25 +47,33 @@ public class GameActivity extends AppCompatActivity implements PropertyChangeLis
     private MutableLiveData<int[][]> currentState;
     private GridLayout chessboardGrid;
     private ConnectionFacade connectionFacade;
+    private long ownID;
+    private String enemyID;
+    private boolean isReceiverRegistered = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_game);
 
-        TextView enemyID = findViewById(R.id.txt_id_game);
+        TextView enemyIDView = findViewById(R.id.txt_id_game);
 
-        Intent intent = new Intent();
+        Intent intent = getIntent();
         playerColor = intent.getStringExtra("PLAYER_COLOR");
-        connectionFacade = (ConnectionFacade) intent.getSerializableExtra("CONNECTION_FACADE");
-        enemyID.setText(intent.getStringExtra("ENEMY_ID"));
-        currentState = new MutableLiveData<>(FENGenerator.initGame(playerColor));
+        ownID = intent.getLongExtra("OWN_ID", 0);
+        connectionFacade = ConnectionFacade.getInstance(ownID, this);
+        enemyID = intent.getStringExtra("ENEMY_ID");
 
-        connectionFacade.addPropertyChangeListener(this);
+        enemyIDView.setText(enemyID);
+
+        Bundle bundle = intent.getExtras();
+        int[][] savedState = (int[][]) bundle.getSerializable("SAVED_STATE");
+
+        currentState = new MutableLiveData<>(new int[8][8]);
 
         chessboardGrid = findViewById(R.id.chessboardGrid);
         int gridSize = 8;
-        int cellSize = 100; // size in pixels for each cell
+        int cellSize = 125; // size in pixels for each cell
 
         chessboardGrid.setRowCount(gridSize);
         chessboardGrid.setColumnCount(gridSize);
@@ -73,23 +89,55 @@ public class GameActivity extends AppCompatActivity implements PropertyChangeLis
                 params.columnSpec = GridLayout.spec(col);
                 cell.setLayoutParams(params);
 
-                // Set alternating background colors
                 if ((row + col) % 2 == 0) {
-                    cell.setBackgroundColor(Color.WHITE);
+                    cell.setBackgroundColor(Color.argb(255, 184, 139, 74));
                 } else {
-                    cell.setBackgroundColor(Color.BLACK);
+                    cell.setBackgroundColor(Color.argb(255, 227, 193, 111));
                 }
 
-                // Add the cell to the GridLayout
                 chessboardGrid.addView(cell);
                 setDragAndDropListeners(cell, row, col);
             }
         }
-
-        updateData(currentState.getValue());
+        updateData(savedState != null ? savedState : FENGenerator.initGame(playerColor));
 
         gameModel = new ViewModelProvider(this).get(GameModel.class);
         gameModel.getUiState().observe(this, this::updateData);
+
+        findViewById(R.id.btn_disconnect_game).setOnClickListener(v -> {
+            connectionFacade.stopEngine(this);
+            connectionFacade.unregisterReceiver(this);
+            File savedStatesFile = new File(getFilesDir(), "saved_states.txt");
+            String pathOfSavedStates = savedStatesFile.getAbsolutePath();
+            try {
+                //Writer.saveGame(pathOfSavedStates, FENGenerator.getFEN(gameModel.getUiState().getValue()), ownID);
+                Writer.saveGame(pathOfSavedStates, FENGenerator.getFEN(currentState.getValue()), Long.parseLong(enemyID.replaceAll("\\D", "")));
+            } catch (IOException e) {Toast.makeText(this, "Couldn't save game!", Toast.LENGTH_SHORT).show();}
+            Intent mainNavIntent = new Intent(this, MainActivity.class);
+            startActivity(mainNavIntent);
+        });
+        findViewById(R.id.btn_accept_draw_game).setOnClickListener(v -> {
+            connectionFacade.unregisterReceiver(this);
+            Intent endNavIntent = new Intent(this, EndActivity.class);
+            endNavIntent.putExtra("TYPE_OF_END", 6);
+            endNavIntent.putExtra("OWN_ID", ownID);
+            endNavIntent.putExtra("ENEMY_ID", enemyID);
+            endNavIntent.putExtra("PLAYER_COLOR", playerColor);
+            startActivity(endNavIntent);
+            finish();
+        });
+        findViewById(R.id.btn_accept_draw_game).setEnabled(false);
+        findViewById(R.id.btn_request_draw_game).setOnClickListener(v -> {
+            try {
+                synchronized (connectionFacade.getLock()) {
+                    connectionFacade.connectTo(Long.parseLong(enemyID.replaceAll("\\D", "")));
+                    connectionFacade.getLock().wait();
+                }
+                connectionFacade.serializeDrawPDU(false);
+            } catch (IOException ignored) {} catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        });
 
     }
 
@@ -127,27 +175,53 @@ public class GameActivity extends AppCompatActivity implements PropertyChangeLis
                     int gridSize = 8;
                     int endRow = index / gridSize;
                     int endCol = index % gridSize;
+                    int[][] newState = new int[currentState.getValue().length][];
+                    for (int i = 0; i < currentState.getValue().length; i++) {
+                        newState[i] = Arrays.copyOf(currentState.getValue()[i], currentState.getValue()[i].length);
+                    }
 
-                    int[][] newState = currentState.getValue();
                     newState[endRow][endCol] = newState[startRow][startCol];
                     newState[startRow][startCol] = 0;
-                    // Attempt to move piece
                     GameRules gameRules = new GameRules(playerColor);
-                    MoveResult moveResult = gameRules.evaluate(startRow, startCol, endRow, endCol, currentState.getValue(), newState);
+                    MoveResult moveResult = gameRules.evaluate(7 - startRow, startCol, 7 - endRow, endCol, currentState.getValue(), newState);
                     if (moveResult.isLegal()) {
-                        setDragAndDropEnabled(false);
-                        gameModel.setUiState(new MutableLiveData<>(newState));
+                        //gameModel.setUiState(new MutableLiveData<>(newState));
+                        updateData(newState);
                         try {
-                            connectionFacade.serializeMovePDU(newState, moveResult.endState());
+                            synchronized (connectionFacade.getLock()) {
+                                connectionFacade.connectTo(Long.parseLong(enemyID.replaceAll("\\D", "")));
+                                connectionFacade.getLock().wait();
+                            }
+                            connectionFacade.serializeMovePDU(Util.reversePlayer(newState), moveResult.endState());
                         } catch (IOException e) {
-                            // dunno
+                            Toast.makeText(this, "Connection Lost", Toast.LENGTH_SHORT).show();
+                            connectionFacade.unregisterReceiver(this);
+                            isReceiverRegistered = false;
+                            connectionFacade.stopEngine(this);
+                            File savedStatesFile = new File(getFilesDir(), "saved_states.txt");
+                            String pathOfSavedStates = savedStatesFile.getAbsolutePath();
+                            try {
+                                Writer.saveGame(pathOfSavedStates, FENGenerator.getFEN(gameModel.getUiState().getValue()), ownID);
+                            } catch (IOException e2) {Toast.makeText(this, "Couldn't save game!", Toast.LENGTH_SHORT).show();}
+                            Intent intent = new Intent(this, MainActivity.class);
+                            startActivity(intent);
+                            finish();
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
                         }
-                        if (moveResult.endState() == EndState.WON.getStateCode()) {
-                            // move to end screen
+                        if (moveResult.endState() != EndState.NO_END.getStateCode()) {
+                            if (isReceiverRegistered) {
+                                connectionFacade.unregisterReceiver(this);
+                                Intent intent = new Intent(this, EndActivity.class);
+                                intent.putExtra("TYPE_OF_END", moveResult.endState());
+                                intent.putExtra("OWN_ID", ownID);
+                                intent.putExtra("ENEMY_ID", enemyID);
+                                intent.putExtra("PLAYER_COLOR", playerColor);
+                                startActivity(intent);
+                                finish();
+                            }
                         }
-                        if (moveResult.endState() == EndState.DRAW_BY_DEAD_POSITION.getStateCode()) {
-                            // move to end screen
-                        }
+                        setDragAndDropEnabled(false);
                     } else {
                         Toast.makeText(this, "Invalid move!", Toast.LENGTH_SHORT).show();
                     }
@@ -185,24 +259,26 @@ public class GameActivity extends AppCompatActivity implements PropertyChangeLis
      * @param newState   The new board state as a 2D int array.
      */
     private void updateData(int[][] newState) {
-        int gridSize = 8; // Assuming square grid
+        int gridSize = 8;
         for (int row = 0; row < gridSize; row++) {
             for (int col = 0; col < gridSize; col++) {
-                // Check if the state has changed
                 if (Objects.requireNonNull(currentState.getValue())[row][col] != newState[row][col]) {
-                    // Calculate the index of the child in GridLayout
+                    currentState.getValue()[row][col] = newState[row][col];
                     int cellIndex = row * gridSize + col;
-
-                    // Get the ImageView for the current cell
                     ImageView cell = (ImageView) chessboardGrid.getChildAt(cellIndex);
 
                     if (newState[row][col] != 0) {
-                        // Set the new image resource based on the new state
                         int newImageResource = getImageResourceForPiece(newState[row][col]);
                         cell.setImageResource(newImageResource);
                     } else {
                         cell.setImageResource(0);
                     }
+
+                    GridLayout.LayoutParams layoutParams = (GridLayout.LayoutParams) cell.getLayoutParams();
+                    layoutParams.setGravity(Gravity.CENTER);
+                    cell.setLayoutParams(layoutParams);
+                    cell.requestLayout();
+                    cell.invalidate();
                 }
             }
         }
@@ -243,14 +319,49 @@ public class GameActivity extends AppCompatActivity implements PropertyChangeLis
         if (evt.getPropertyName().equals("Move")) {
             if ((int) evt.getOldValue() == EndState.NO_END.getStateCode()) {
                 setDragAndDropEnabled(true);
-                gameModel.setUiState(new MutableLiveData<>((int[][]) evt.getNewValue()));
+                //gameModel.setUiState(new MutableLiveData<>((int[][]) evt.getNewValue()));
+
+                runOnUiThread(() -> updateData((int[][]) evt.getNewValue()));
+            } else {
+                connectionFacade.unregisterReceiver(this);
+                Intent intent = new Intent(this, EndActivity.class);
+                intent.putExtra("TYPE_OF_END", (int) evt.getOldValue());
+                intent.putExtra("OWN_ID", ownID);
+                intent.putExtra("ENEMY_ID", enemyID);
+                intent.putExtra("PLAYER_COLOR", playerColor);
+                startActivity(intent);
+                finish();
             }
         }
         if (evt.getPropertyName().equals("Draw")) {
-            // button soll available werden oder bei Akzeptanz soll neues intent ausgelöst werden
+            if ((boolean) evt.getNewValue()) {
+                connectionFacade.unregisterReceiver(this);
+                Intent intent = new Intent(this, EndActivity.class);
+                intent.putExtra("TYPE_OF_END", 6);
+                intent.putExtra("OWN_ID", ownID);
+                intent.putExtra("ENEMY_ID", enemyID);
+                intent.putExtra("PLAYER_COLOR", playerColor);
+                startActivity(intent);
+                finish();
+            } else {
+                runOnUiThread(() -> findViewById(R.id.btn_accept_draw_game).setEnabled(true));
+            }
         }
         if (evt.getPropertyName().equals("Connection")) {
-            // falls Abbruch -> Hauptmenü Nav
+            if ((int) evt.getNewValue() == BluetoothAdapter.STATE_DISCONNECTED) {
+                Toast.makeText(this, "Connection Lost", Toast.LENGTH_SHORT).show();
+                connectionFacade.unregisterReceiver(this);
+                connectionFacade.stopEngine(this);
+                File savedStatesFile = new File(getFilesDir(), "saved_states.txt");
+                String pathOfSavedStates = savedStatesFile.getAbsolutePath();
+                try {
+                    Writer.saveGame(pathOfSavedStates, FENGenerator.getFEN(currentState.getValue()), Long.parseLong(enemyID.replaceAll("\\D", "")));
+                    //Writer.saveGame(pathOfSavedStates, FENGenerator.getFEN(gameModel.getUiState().getValue()), ownID);
+                } catch (IOException e) {Toast.makeText(this, "Couldn't save game!", Toast.LENGTH_SHORT).show();}
+                Intent intent = new Intent(this, MainActivity.class);
+                startActivity(intent);
+                finish();
+            }
         }
     }
 }

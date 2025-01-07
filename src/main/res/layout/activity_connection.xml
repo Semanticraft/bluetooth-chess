@@ -26,7 +26,7 @@
 
     <!-- RecyclerView -->
     <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/recycler_view_ca"
+        android:id="@+id/recycler_view_c"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_below="@id/btn_back_c"

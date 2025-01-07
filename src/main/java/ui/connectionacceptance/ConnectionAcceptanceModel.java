@@ -18,6 +18,6 @@ public class ConnectionAcceptanceModel extends ViewModel {
 
     void addConnectionRequest(ConnectionRequest connectionRequest) {
         connectionRequests.add(connectionRequest);
-        uiState.setValue(connectionRequests);
+        uiState.postValue(connectionRequests);
     }
 }

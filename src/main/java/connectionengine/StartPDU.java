@@ -32,13 +32,13 @@ class StartPDU implements Serializable {
     @Serial
     private void writeObject(@NotNull ObjectOutputStream out) throws IOException {
         out.writeObject(savedState);
-        out.writeObject(enemyID);
+        out.writeLong(enemyID);
     }
 
     @Serial
     private void readObject(@NotNull ObjectInputStream in) throws IOException, ClassNotFoundException {
         savedState = (int[][]) in.readObject();
-        enemyID = (long) in.readLong();
+        enemyID = in.readLong();
     }
 
 }

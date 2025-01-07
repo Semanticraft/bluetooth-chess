@@ -2,6 +2,9 @@ package ui.connectionacceptance;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -24,6 +27,7 @@ import java.util.Locale;
 
 import connectionengine.ConnectionFacade;
 import ui.game.GameActivity;
+import util.Util;
 
 public class ConnectionAcceptanceAdapter extends RecyclerView.Adapter<ConnectionAcceptanceAdapter.ConnectionAcceptanceViewHolder> {
     private List<ConnectionRequest> connectionRequests = new ArrayList<>();
@@ -70,18 +74,29 @@ public class ConnectionAcceptanceAdapter extends RecyclerView.Adapter<Connection
         String formattedDate = sdf.format(date);
         holder.timestampTextView.setText(formattedDate);
         holder.acceptButton.setOnClickListener(v -> {
-            connectionFacade.connectTo(connectionRequest.getEnemyID());
+            synchronized (connectionFacade.getLock()) {
+                connectionFacade.connectTo(connectionRequest.getEnemyID());
+                try {
+                    connectionFacade.getLock().wait();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
             try {
-                connectionFacade.serializeStartPDU(connectionRequest.getState());
+                connectionFacade.serializeStartPDU(Util.reversePlayer(connectionRequest.getState()));
             } catch (IOException e) {
                 Toast.makeText(context, "Connection unsuccessful!", Toast.LENGTH_SHORT).show();
+                connectionRequests.remove(position);
                 notifyItemRemoved(position);
             }
+            connectionFacade.unregisterReceiver(context);
             Intent intent = new Intent(context, GameActivity.class);
             intent.putExtra("PLAYER_COLOR", "black");
-            intent.putExtra("ENEMY_ID", connectionRequest.getEnemyID());
-            intent.putExtra("CONNECTION_FACADE", connectionFacade);
-            intent.putExtra("CURRENT_DEVICE", connectionFacade.getCurrentDevice());
+            intent.putExtra("ENEMY_ID", String.valueOf(connectionRequest.getEnemyID()));
+            Bundle bundle = new Bundle();
+            bundle.putSerializable("SAVED_STATE", connectionRequest.getState());
+            intent.putExtras(bundle);
+            intent.putExtra("OWN_ID", connectionFacade.getPlayerID());
             context.startActivity(intent);
         });
     }

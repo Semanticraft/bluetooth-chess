@@ -8,18 +8,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class SaveStateForEnemyModel extends ViewModel {
-    private List<String> savedStates = new ArrayList<>();
-    private final MutableLiveData<List<String>> uiState = new MutableLiveData<>();
+    private List<String[]> savedStates = new ArrayList<>();
+    private final MutableLiveData<List<String[]>> uiState = new MutableLiveData<>();
 
-    LiveData<List<String>> getUiState() {
+    LiveData<List<String[]>> getUiState() {
         return uiState;
     }
 
-    List<String> getSavedStates() {
+    List<String[]> getSavedStates() {
         return savedStates;
     }
 
-    void addSavedState(String saveState) {
+    void addSavedState(String[] saveState) {
         savedStates.add(saveState);
         uiState.setValue(savedStates);
     }

@@ -67,6 +67,7 @@ public class SaveStateHistoryAdapter extends RecyclerView.Adapter<ui.savestatehi
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
+            saveStates.remove(position);
             notifyItemRemoved(position);
         });
     }
